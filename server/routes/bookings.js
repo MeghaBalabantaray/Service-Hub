@@ -6,10 +6,13 @@ import Service from '../models/Service.js';
 const router = express.Router();
 
 router.get('/', requireAuth, async (req, res) => {
-  const filter = req.user.role === 'provider'
-    ? { provider: req.user.id }
-    : { user: req.user.id };
+  const filter = req.user.role === 'admin'
+    ? {}
+    : req.user.role === 'provider'
+      ? { provider: req.user.id }
+      : { user: req.user.id };
   const bookings = await Booking.find(filter)
+    .sort({ createdAt: -1 })
     .populate('service', 'title serviceType price city')
     .populate('user provider', 'name email');
 
@@ -44,7 +47,9 @@ router.patch('/:id/status', requireAuth, requireRole('provider', 'admin'), async
     filter,
     { status: req.body.status },
     { new: true },
-  );
+  )
+    .populate('service', 'title serviceType price city')
+    .populate('user provider', 'name email');
 
   if (!booking) {
     return res.status(404).json({ message: 'Booking not found' });

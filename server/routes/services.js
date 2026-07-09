@@ -85,6 +85,14 @@ router.get('/mine', requireAuth, requireRole('provider', 'admin'), async (req, r
   res.json(services);
 });
 
+router.get('/admin/all', requireAuth, requireRole('admin'), async (req, res) => {
+  const services = await Service.find({})
+    .sort({ status: 1, createdAt: -1 })
+    .populate('provider', 'name email city area phone approved');
+
+  res.json(services);
+});
+
 router.post('/', requireAuth, requireRole('provider', 'admin'), async (req, res) => {
   const service = await Service.create({
     ...req.body,

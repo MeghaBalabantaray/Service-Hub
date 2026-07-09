@@ -1,11 +1,12 @@
 import axios from 'axios';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   BrowserRouter,
   NavLink,
   Route,
   Routes,
+  useNavigate,
   useParams,
 } from 'react-router-dom';
 import {
@@ -33,6 +34,36 @@ import './styles.css';
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001/api',
 });
+
+const savedSession = (() => {
+  try {
+    return JSON.parse(localStorage.getItem('servicehub-session') || 'null');
+  } catch {
+    return null;
+  }
+})();
+
+function authHeaders(token) {
+  return {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  };
+}
+
+function tomorrowMorning() {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(10, 0, 0, 0);
+  return date.toISOString().slice(0, 16);
+}
+
+function formatBookingDate(value) {
+  return new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
 
 function normalizeService(item) {
   return {
@@ -490,6 +521,17 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [session, setSessionState] = useState(savedSession);
+
+  const setSession = (nextSession) => {
+    setSessionState(nextSession);
+
+    if (nextSession) {
+      localStorage.setItem('servicehub-session', JSON.stringify(nextSession));
+    } else {
+      localStorage.removeItem('servicehub-session');
+    }
+  };
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -542,7 +584,7 @@ function App() {
   return (
     <BrowserRouter>
       <div className="app-shell">
-        <Header />
+        <Header user={session?.user} onLogout={() => setSession(null)} />
         <main>
           <Routes>
             <Route
@@ -563,10 +605,19 @@ function App() {
                 />
               }
             />
-            <Route path="/services/:id" element={<ServiceDetails favorites={favorites} toggleFavorite={toggleFavorite} />} />
-            <Route path="/provider" element={<ProviderDashboard />} />
-            <Route path="/admin" element={<AdminDashboard />} />
-            <Route path="/auth" element={<AuthPage />} />
+            <Route
+              path="/services/:id"
+              element={
+                <ServiceDetails
+                  favorites={favorites}
+                  toggleFavorite={toggleFavorite}
+                  session={session}
+                />
+              }
+            />
+            <Route path="/provider" element={<ProviderDashboard session={session} />} />
+            <Route path="/admin" element={<AdminDashboard session={session} />} />
+            <Route path="/auth" element={<AuthPage session={session} setSession={setSession} />} />
           </Routes>
         </main>
       </div>
@@ -574,7 +625,7 @@ function App() {
   );
 }
 
-function Header() {
+function Header({ user, onLogout }) {
   return (
     <header className="topbar">
       <NavLink to="/" className="brand" aria-label="ServiceHub home">
@@ -585,7 +636,12 @@ function Header() {
         <NavLink to="/">Services</NavLink>
         <NavLink to="/provider">Provider</NavLink>
         <NavLink to="/admin">Admin</NavLink>
-        <NavLink to="/auth">Login</NavLink>
+        {user ? <span className="nav-user">Hi, {user.name}</span> : null}
+        {user ? (
+          <button className="nav-logout" type="button" onClick={onLogout}>Logout</button>
+        ) : (
+          <NavLink to="/auth">Login</NavLink>
+        )}
       </nav>
       <button className="icon-button" aria-label="Open menu" type="button">
         <Menu size={20} />
@@ -802,10 +858,16 @@ function ServiceCard({ item, isFavorite, toggleFavorite }) {
   );
 }
 
-function ServiceDetails({ favorites, toggleFavorite }) {
+function ServiceDetails({ favorites, toggleFavorite, session }) {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [item, setItem] = useState(null);
   const [loadError, setLoadError] = useState('');
+  const [scheduledFor, setScheduledFor] = useState(tomorrowMorning);
+  const [address, setAddress] = useState('');
+  const [notes, setNotes] = useState('');
+  const [bookingStatus, setBookingStatus] = useState({ type: '', message: '' });
+  const [isBooking, setIsBooking] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -854,6 +916,47 @@ function ServiceDetails({ favorites, toggleFavorite }) {
 
   const isFavorite = favorites.includes(item.id);
 
+  const bookService = async (event) => {
+    event.preventDefault();
+
+    if (!session?.token) {
+      navigate('/auth');
+      return;
+    }
+
+    if (!address.trim()) {
+      setBookingStatus({ type: 'error', message: 'Please enter your address before booking.' });
+      return;
+    }
+
+    setIsBooking(true);
+    setBookingStatus({ type: '', message: '' });
+
+    try {
+      await api.post(
+        '/bookings',
+        {
+          serviceId: item.id,
+          scheduledFor,
+          address: address.trim(),
+          notes: notes.trim(),
+        },
+        authHeaders(session.token),
+      );
+
+      setBookingStatus({
+        type: 'success',
+        message: 'Booking requested successfully. The provider can now confirm it from their dashboard/API.',
+      });
+      setNotes('');
+    } catch (error) {
+      const message = error.response?.data?.message || 'Booking failed. Please try again.';
+      setBookingStatus({ type: 'error', message });
+    } finally {
+      setIsBooking(false);
+    }
+  };
+
   return (
     <section className="details-layout">
       <img src={item.image} alt="" className="details-image" />
@@ -873,17 +976,48 @@ function ServiceDetails({ favorites, toggleFavorite }) {
           <strong>{item.provider}</strong>
           <a href={`tel:${item.phone.replaceAll(' ', '')}`}><Phone size={18} />Call now</a>
         </div>
-        <div className="booking-box">
+        <form className="booking-box" onSubmit={bookService}>
           <div>
             <span>Starting price</span>
             <strong>₹{item.price.toLocaleString('en-IN')}</strong>
           </div>
-          <button type="button"><CalendarCheck size={18} />Book Service</button>
+          <label>
+            <span>Date and time</span>
+            <input
+              type="datetime-local"
+              value={scheduledFor}
+              onChange={(event) => setScheduledFor(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            <span>Service address</span>
+            <input
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              placeholder="House number, area, city"
+              required
+            />
+          </label>
+          <label>
+            <span>Notes</span>
+            <input
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="Problem details or preferred instructions"
+            />
+          </label>
+          {bookingStatus.message ? (
+            <p className={`form-message ${bookingStatus.type}`}>{bookingStatus.message}</p>
+          ) : null}
+          <button type="submit" disabled={isBooking}>
+            <CalendarCheck size={18} />{isBooking ? 'Booking...' : session?.token ? 'Book Service' : 'Login to Book'}
+          </button>
           <button className="secondary" type="button" onClick={() => toggleFavorite(item.id)}>
             <Heart size={18} fill={isFavorite ? 'currentColor' : 'none'} />
             {isFavorite ? 'Saved' : 'Save'}
           </button>
-        </div>
+        </form>
         <div className="review-box">
           <h2>Reviews</h2>
           <p>Customers like the punctual staff, clear pricing, and simple booking updates.</p>
@@ -900,7 +1034,83 @@ function ServiceDetails({ favorites, toggleFavorite }) {
   );
 }
 
-function ProviderDashboard() {
+function ProviderDashboard({ session }) {
+  const navigate = useNavigate();
+  const [bookings, setBookings] = useState([]);
+  const [bookingStatus, setBookingStatus] = useState({ type: '', message: '' });
+  const [isLoadingBookings, setIsLoadingBookings] = useState(false);
+
+  const canManageBookings = session?.user?.role === 'provider' || session?.user?.role === 'admin';
+
+  // Provider publish/upload state
+  const [publishStatus, setPublishStatus] = useState({ type: '', message: '' });
+  const [draft, setDraft] = useState({
+    title: '',
+    category: 'Home Services',
+    serviceType: '',
+    city: 'Bhubaneswar',
+    area: '',
+    contactName: '',
+    phone: '',
+    price: '',
+    description: '',
+  });
+  const [pendingImages, setPendingImages] = useState([]); // File[]
+  const canPublish = session?.token && (session?.user?.role === 'provider' || session?.user?.role === 'admin');
+
+  useEffect(() => {
+    if (!session?.token || !canManageBookings) {
+      setBookings([]);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadBookings() {
+      setIsLoadingBookings(true);
+      setBookingStatus({ type: '', message: '' });
+
+      try {
+        const response = await api.get('/bookings', {
+          ...authHeaders(session.token),
+          signal: controller.signal,
+        });
+        setBookings(response.data);
+      } catch (error) {
+        if (!axios.isCancel(error)) {
+          const message = error.response?.data?.message || 'Could not load provider bookings.';
+          setBookingStatus({ type: 'error', message });
+        }
+      } finally {
+        setIsLoadingBookings(false);
+      }
+    }
+
+    loadBookings();
+
+    return () => controller.abort();
+  }, [canManageBookings, session?.token]);
+
+  const updateBookingStatus = async (bookingId, status) => {
+    setBookingStatus({ type: '', message: '' });
+
+    try {
+      const response = await api.patch(
+        `/bookings/${bookingId}/status`,
+        { status },
+        authHeaders(session.token),
+      );
+
+      setBookings((current) =>
+        current.map((booking) => (booking._id?.toString() === bookingId?.toString() ? response.data : booking)),
+      );
+      setBookingStatus({ type: 'success', message: `Booking marked as ${status}.` });
+    } catch (error) {
+      const message = error.response?.data?.message || 'Could not update booking status.';
+      setBookingStatus({ type: 'error', message });
+    }
+  };
+
   return (
     <section className="dashboard">
       <div className="section-heading">
@@ -908,106 +1118,622 @@ function ProviderDashboard() {
           <p className="eyebrow">Provider Side</p>
           <h1>Manage services and bookings</h1>
         </div>
-        <button type="button"><UserPlus size={18} />Register Provider</button>
+        <button type="button" onClick={() => navigate('/auth')}><UserPlus size={18} />Register Provider</button>
       </div>
       <div className="dashboard-grid">
         <Panel title="Add Service" icon={Store}>
-          <input placeholder="Service title" />
-          <select>
-            {categories.map((item) => <option key={item.name}>{item.name}</option>)}
+          {publishStatus.message ? (
+            <p className={`form-message ${publishStatus.type}`}>{publishStatus.message}</p>
+          ) : null}
+
+          <input
+            placeholder="Service title"
+            value={draft.title}
+            onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+          />
+
+          <select
+            value={draft.category}
+            onChange={(e) => setDraft((d) => ({ ...d, category: e.target.value }))}
+          >
+            {categories.map((item) => (
+              <option key={item.name} value={item.name}>
+                {item.name}
+              </option>
+            ))}
           </select>
-          <select>
-            {categories.flatMap((item) => item.services).map((service) => <option key={service}>{service}</option>)}
+
+          <select
+            value={draft.serviceType}
+            onChange={(e) => setDraft((d) => ({ ...d, serviceType: e.target.value }))}
+          >
+            <option value="">Select service type</option>
+            {categories
+              .flatMap((item) => item.services)
+              .map((service) => (
+                <option key={service} value={service}>
+                  {service}
+                </option>
+              ))}
           </select>
-          <input placeholder="City" />
-          <input placeholder="Nearby area / locality" />
-          <input placeholder="Provider / contact name" />
-          <input placeholder="Contact number" />
-          <input placeholder="Price" type="number" />
-          <input placeholder="Service details" />
-          <button type="button">Publish Listing</button>
+
+          <input
+            placeholder="City"
+            value={draft.city}
+            onChange={(e) => setDraft((d) => ({ ...d, city: e.target.value }))}
+          />
+          <input
+            placeholder="Nearby area / locality"
+            value={draft.area}
+            onChange={(e) => setDraft((d) => ({ ...d, area: e.target.value }))}
+          />
+          <input
+            placeholder="Provider / contact name"
+            value={draft.contactName}
+            onChange={(e) => setDraft((d) => ({ ...d, contactName: e.target.value }))}
+          />
+          <input
+            placeholder="Contact number"
+            value={draft.phone}
+            onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))}
+          />
+          <input
+            placeholder="Price"
+            type="number"
+            value={draft.price}
+            onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+          />
+          <input
+            placeholder="Service details"
+            value={draft.description}
+            onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+          />
+
+          <button
+            type="button"
+            disabled={!canPublish || publishStatus.type === 'loading'}
+            onClick={async () => {
+              if (!canPublish) {
+                setPublishStatus({ type: 'error', message: 'Please login as provider/admin.' });
+                return;
+              }
+
+              // Minimal client-side checks
+              if (!draft.title.trim() || !draft.serviceType.trim() || !draft.area.trim() || !draft.contactName.trim() || !draft.phone.trim() || !draft.description.trim()) {
+                setPublishStatus({ type: 'error', message: 'Please fill all required service fields.' });
+                return;
+              }
+
+              const priceNumber = Number(draft.price);
+              if (!Number.isFinite(priceNumber) || priceNumber < 0) {
+                setPublishStatus({ type: 'error', message: 'Please enter a valid price.' });
+                return;
+              }
+
+              try {
+                setPublishStatus({ type: 'loading', message: 'Publishing listing...' });
+
+                let images = [];
+                if (pendingImages.length > 0) {
+                  const fd = new FormData();
+                  for (const file of pendingImages) fd.append('images', file);
+                  const uploadRes = await api.post('/uploads/service-images', fd, {
+                    headers: {
+                      Authorization: `Bearer ${session.token}`,
+                      ...fd.getHeaders,
+                    },
+                  });
+                  images = uploadRes.data.urls || [];
+                }
+
+                const res = await api.post(
+                  '/services',
+                  {
+                    ...draft,
+                    price: priceNumber,
+                    images,
+                  },
+                  authHeaders(session.token),
+                );
+
+                setPublishStatus({ type: 'success', message: 'Listing published successfully.' });
+                setDraft({
+                  title: '',
+                  category: 'Home Services',
+                  serviceType: '',
+                  city: 'Bhubaneswar',
+                  area: '',
+                  contactName: '',
+                  phone: '',
+                  price: '',
+                  description: '',
+                });
+                setPendingImages([]);
+              } catch (e) {
+                const message = e?.response?.data?.message || 'Publish failed. Please try again.';
+                setPublishStatus({ type: 'error', message });
+              } finally {
+                if (publishStatus.type === 'loading') setPublishStatus({ type: '', message: '' });
+              }
+            }}
+          >
+            Publish Listing
+          </button>
         </Panel>
         <Panel title="Upload Images" icon={CheckCircle2}>
-          <div className="upload-box">Drop service photos here</div>
-          <button type="button">Upload</button>
+          {publishStatus.type === 'loading' ? null : (
+            <div className="upload-box" role="button" tabIndex={0}>
+              <label style={{ cursor: 'pointer' }}>
+                Drop service photos here or click to select
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    setPendingImages(files);
+                  }}
+                />
+              </label>
+            </div>
+          )}
+
+          {pendingImages.length > 0 ? (
+            <p style={{ margin: 0, color: 'var(--muted)', fontWeight: 700 }}>
+              Selected {pendingImages.length} image{pendingImages.length === 1 ? '' : 's'}
+            </p>
+          ) : (
+            <p style={{ margin: 0, color: 'var(--muted)', fontWeight: 700 }}>No images selected yet</p>
+          )}
+
+          <button
+            type="button"
+            disabled={!pendingImages.length}
+            onClick={() => setPendingImages([])}
+          >
+            Clear
+          </button>
         </Panel>
         <Panel title="Bookings" icon={CalendarCheck}>
-          {['House cleaning', 'Bike rental', 'Tiffin weekly plan'].map((item, index) => (
-            <div className="booking-row" key={item}>
-              <span>{item}</span>
-              <strong>{index === 0 ? 'New' : 'Confirmed'}</strong>
+          {!session?.token ? (
+            <div className="empty-state compact">
+              <h3>Login required</h3>
+              <p>Login as a provider to see booking requests.</p>
+              <button type="button" onClick={() => navigate('/auth')}>Login</button>
             </div>
-          ))}
+          ) : !canManageBookings ? (
+            <div className="empty-state compact">
+              <h3>Provider account needed</h3>
+              <p>This dashboard is for provider or admin accounts.</p>
+            </div>
+          ) : isLoadingBookings ? (
+            <div className="empty-state compact">
+              <h3>Loading bookings</h3>
+              <p>Fetching requests assigned to your provider account.</p>
+            </div>
+          ) : bookings.length > 0 ? (
+            <div className="booking-list">
+              {bookingStatus.message ? (
+                <p className={`form-message ${bookingStatus.type}`}>{bookingStatus.message}</p>
+              ) : null}
+              {bookings.map((booking) => (
+                <article className="provider-booking" key={booking._id}>
+                  <div>
+                    <span>{booking.service?.serviceType || 'Service'}</span>
+                    <h3>{booking.service?.title || 'Booked service'}</h3>
+                    <p>{formatBookingDate(booking.scheduledFor)}</p>
+                    <p>{booking.address}</p>
+                    {booking.notes ? <p>{booking.notes}</p> : null}
+                    <p>Customer: {booking.user?.name || 'User'} ({booking.user?.email || 'No email'})</p>
+                  </div>
+                  <strong className={`status-pill ${booking.status}`}>{booking.status}</strong>
+                  <div className="booking-actions">
+                    <button
+                      type="button"
+                      disabled={booking.status === 'confirmed'}
+                      onClick={() => updateBookingStatus(booking._id, 'confirmed')}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      disabled={booking.status === 'completed'}
+                      onClick={() => updateBookingStatus(booking._id, 'completed')}
+                    >
+                      Complete
+                    </button>
+                    <button
+                      className="danger"
+                      type="button"
+                      disabled={booking.status === 'cancelled'}
+                      onClick={() => updateBookingStatus(booking._id, 'cancelled')}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact">
+              <h3>No booking requests yet</h3>
+              <p>Bookings for services owned by this provider will appear here.</p>
+            </div>
+          )}
         </Panel>
       </div>
     </section>
   );
 }
 
-function AdminDashboard() {
+function AdminDashboard({ session }) {
+  const navigate = useNavigate();
+  const [services, setServices] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [adminStatus, setAdminStatus] = useState({ type: '', message: '' });
+  const [isLoading, setIsLoading] = useState(false);
+  const isAdmin = session?.user?.role === 'admin';
+
+  const loadAdminData = useCallback(async ({ signal, quiet = false } = {}) => {
+    if (!session?.token || !isAdmin) {
+      setServices([]);
+      setBookings([]);
+      return;
+    }
+
+    setIsLoading(true);
+    if (!quiet) {
+      setAdminStatus({ type: '', message: '' });
+    }
+
+    try {
+      const [servicesResponse, bookingsResponse] = await Promise.all([
+        api.get('/services/admin/all', {
+          ...authHeaders(session.token),
+          signal,
+        }),
+        api.get('/bookings', {
+          ...authHeaders(session.token),
+          signal,
+        }),
+      ]);
+
+      setServices(servicesResponse.data);
+      setBookings(bookingsResponse.data);
+      if (!quiet) {
+        setAdminStatus({ type: 'success', message: 'Admin data refreshed.' });
+      }
+    } catch (error) {
+      if (!axios.isCancel(error)) {
+        const message = error.response?.data?.message || 'Could not load admin data.';
+        setAdminStatus({ type: 'error', message });
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isAdmin, session?.token]);
+
+  useEffect(() => {
+    if (!session?.token || !isAdmin) {
+      setServices([]);
+      setBookings([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    loadAdminData({ signal: controller.signal, quiet: true });
+
+    return () => controller.abort();
+  }, [isAdmin, loadAdminData, session?.token]);
+
+  useEffect(() => {
+    if (!session?.token || !isAdmin) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadAdminData({ quiet: true });
+    }, 10000);
+
+    const refreshOnFocus = () => loadAdminData({ quiet: true });
+    window.addEventListener('focus', refreshOnFocus);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshOnFocus);
+    };
+  }, [isAdmin, loadAdminData, session?.token]);
+
+  const updateServiceStatus = async (serviceId, action) => {
+    setAdminStatus({ type: '', message: '' });
+
+    try {
+      const response = await api.patch(
+        `/services/${serviceId}/${action}`,
+        {},
+        authHeaders(session.token),
+      );
+
+      setServices((current) =>
+        current.map((service) => (service._id === serviceId ? response.data : service)),
+      );
+      setAdminStatus({ type: 'success', message: `Service ${action === 'approve' ? 'approved' : 'removed'}.` });
+    } catch (error) {
+      const message = error.response?.data?.message || 'Could not update service.';
+      setAdminStatus({ type: 'error', message });
+    }
+  };
+
+  const updateBookingStatus = async (bookingId, status) => {
+    setAdminStatus({ type: '', message: '' });
+
+    try {
+      const response = await api.patch(
+        `/bookings/${bookingId}/status`,
+        { status },
+        authHeaders(session.token),
+      );
+
+      setBookings((current) =>
+        current.map((booking) => (booking._id?.toString() === bookingId?.toString() ? response.data : booking)),
+      );
+      setAdminStatus({ type: 'success', message: `Booking marked as ${status}.` });
+    } catch (error) {
+      const message = error.response?.data?.message || 'Could not update booking.';
+      setAdminStatus({ type: 'error', message });
+    }
+  };
+
+  const pendingServices = services.filter((service) => service.status === 'pending');
+  const activeBookings = bookings.filter((booking) => booking.status !== 'completed' && booking.status !== 'cancelled');
+  const removedServices = services.filter((service) => service.status === 'removed');
+
   return (
-    <section className="dashboard">
+    <section className="dashboard admin-dashboard">
       <div className="section-heading">
         <div>
           <p className="eyebrow">Admin Side</p>
           <h1>Approve providers and monitor quality</h1>
         </div>
+        {!session?.token ? (
+          <button type="button" onClick={() => navigate('/auth')}>Login as Admin</button>
+        ) : isAdmin ? (
+          <button type="button" onClick={() => loadAdminData()}>Refresh</button>
+        ) : null}
       </div>
+      {adminStatus.message ? <p className={`form-message ${adminStatus.type}`}>{adminStatus.message}</p> : null}
       <div className="stat-grid">
-        <Stat label="Users" value="18,420" />
-        <Stat label="Providers Pending" value="42" />
-        <Stat label="Bookings" value="3,108" />
-        <Stat label="Fake Listings Removed" value="117" />
+        <Stat label="Total Services" value={isAdmin ? services.length : '-'} />
+        <Stat label="Pending Services" value={isAdmin ? pendingServices.length : '-'} />
+        <Stat label="Bookings" value={isAdmin ? bookings.length : '-'} />
+        <Stat label="Removed Listings" value={isAdmin ? removedServices.length : '-'} />
       </div>
-      <div className="dashboard-grid">
-        <Panel title="Analytics" icon={BarChart3}>
-          <div className="bars">
-            <span style={{ height: '64%' }} />
-            <span style={{ height: '42%' }} />
-            <span style={{ height: '88%' }} />
-            <span style={{ height: '70%' }} />
-            <span style={{ height: '52%' }} />
-          </div>
-        </Panel>
-        <Panel title="Provider Approvals" icon={ShieldCheck}>
-          {['CleanNest Services', 'UrbanStay Living', 'FitForm Studio'].map((name) => (
-            <div className="booking-row" key={name}>
-              <span>{name}</span>
-              <button type="button">Approve</button>
+      <div className="admin-workspace">
+        <Panel title="Service Approvals" icon={ShieldCheck}>
+          {!session?.token ? (
+            <div className="empty-state compact">
+              <h3>Login required</h3>
+              <p>Login with an admin account to approve services.</p>
             </div>
-          ))}
+          ) : !isAdmin ? (
+            <div className="empty-state compact">
+              <h3>Admin account needed</h3>
+              <p>Your current account does not have admin access.</p>
+            </div>
+          ) : isLoading ? (
+            <div className="empty-state compact">
+              <h3>Loading services</h3>
+              <p>Fetching pending listings.</p>
+            </div>
+          ) : pendingServices.length > 0 ? (
+            <div className="booking-list">
+              {pendingServices.map((service) => (
+                <article className="provider-booking" key={service._id}>
+                  <div>
+                    <span>{service.category} / {service.serviceType}</span>
+                    <h3>{service.title}</h3>
+                    <p>{service.area}, {service.city}</p>
+                    <p>Provider: {service.provider?.name || service.contactName}</p>
+                    <p>Price: ₹{Number(service.price).toLocaleString('en-IN')}</p>
+                  </div>
+                  <strong className={`status-pill ${service.status}`}>{service.status}</strong>
+                  <div className="booking-actions">
+                    <button type="button" onClick={() => updateServiceStatus(service._id, 'approve')}>
+                      Approve
+                    </button>
+                    <button className="danger" type="button" onClick={() => updateServiceStatus(service._id, 'remove')}>
+                      Remove
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact">
+              <h3>No pending services</h3>
+              <p>New provider listings will appear here for approval.</p>
+            </div>
+          )}
+        </Panel>
+        <Panel title="Booking Control" icon={CalendarCheck}>
+          {!session?.token || !isAdmin ? (
+            <div className="empty-state compact">
+              <h3>Admin login required</h3>
+              <p>Admin can confirm, complete, or cancel any booking.</p>
+            </div>
+          ) : isLoading ? (
+            <div className="empty-state compact">
+              <h3>Loading bookings</h3>
+              <p>Fetching booking requests.</p>
+            </div>
+          ) : activeBookings.length > 0 ? (
+            <div className="booking-list">
+              {activeBookings.map((booking) => (
+                <article className="provider-booking" key={booking._id}>
+                  <div>
+                    <span>{booking.service?.serviceType || 'Service'}</span>
+                    <h3>{booking.service?.title || 'Booked service'}</h3>
+                    <p>{formatBookingDate(booking.scheduledFor)}</p>
+                    <p>{booking.address}</p>
+                    <p>Customer: {booking.user?.name || 'User'}</p>
+                    <p>Provider: {booking.provider?.name || 'Provider'}</p>
+                  </div>
+                  <strong className={`status-pill ${booking.status}`}>{booking.status}</strong>
+                  <div className="booking-actions">
+                    <button
+                      type="button"
+                      disabled={booking.status === 'confirmed'}
+                      onClick={() => updateBookingStatus(booking._id, 'confirmed')}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      disabled={booking.status === 'completed'}
+                      onClick={() => updateBookingStatus(booking._id, 'completed')}
+                    >
+                      Complete
+                    </button>
+                    <button
+                      className="danger"
+                      type="button"
+                      disabled={booking.status === 'cancelled'}
+                      onClick={() => updateBookingStatus(booking._id, 'cancelled')}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact">
+              <h3>No active bookings</h3>
+              <p>Requested and confirmed bookings will appear here.</p>
+            </div>
+          )}
+        </Panel>
+        <Panel title="Quality Monitor" icon={BarChart3} className="admin-monitor">
+          <div className="bars">
+            <span style={{ height: `${Math.min(92, Math.max(8, pendingServices.length * 12))}%` }} />
+            <span style={{ height: `${Math.min(92, Math.max(8, activeBookings.length * 10))}%` }} />
+            <span style={{ height: `${Math.min(92, Math.max(8, removedServices.length * 16))}%` }} />
+          </div>
         </Panel>
       </div>
     </section>
   );
 }
 
-function AuthPage() {
+function AuthPage({ session, setSession }) {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState('login');
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'user',
+  });
+  const [status, setStatus] = useState({ type: '', message: '' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const updateField = (field, value) => {
+    setForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const submitAuth = async (event) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setStatus({ type: '', message: '' });
+
+    try {
+      const payload = mode === 'login'
+        ? { email: form.email, password: form.password }
+        : {
+            name: form.name,
+            email: form.email,
+            password: form.password,
+            role: form.role,
+          };
+      const response = await api.post(`/auth/${mode === 'login' ? 'login' : 'register'}`, payload);
+
+      setSession(response.data);
+      setStatus({ type: 'success', message: `${mode === 'login' ? 'Logged in' : 'Account created'} successfully.` });
+      navigate('/');
+    } catch (error) {
+      const message = error.response?.data?.message || 'Authentication failed. Please check the details.';
+      setStatus({ type: 'error', message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <section className="auth-layout">
       <div>
         <p className="eyebrow">Register or login</p>
-        <h1>Join ServiceHub</h1>
+        <h1>{session?.user ? `Welcome, ${session.user.name}` : 'Join ServiceHub'}</h1>
         <p>Users can book services, save favorites, and write reviews. Providers can publish listings and manage bookings.</p>
       </div>
-      <form className="auth-card">
-        <input placeholder="Full name" />
-        <input placeholder="Email" type="email" />
-        <input placeholder="Password" type="password" />
-        <select>
-          <option>User</option>
-          <option>Service Provider</option>
-          <option>Admin</option>
-        </select>
-        <button type="button">Create Account</button>
+      <form className="auth-card" onSubmit={submitAuth}>
+        <div className="mode-tabs" aria-label="Authentication mode">
+          <button
+            className={mode === 'login' ? 'active' : ''}
+            type="button"
+            onClick={() => setMode('login')}
+          >
+            Login
+          </button>
+          <button
+            className={mode === 'register' ? 'active' : ''}
+            type="button"
+            onClick={() => setMode('register')}
+          >
+            Register
+          </button>
+        </div>
+        {mode === 'register' ? (
+          <input
+            placeholder="Full name"
+            value={form.name}
+            onChange={(event) => updateField('name', event.target.value)}
+            required
+          />
+        ) : null}
+        <input
+          placeholder="Email"
+          type="email"
+          value={form.email}
+          onChange={(event) => updateField('email', event.target.value)}
+          required
+        />
+        <input
+          placeholder="Password"
+          type="password"
+          value={form.password}
+          onChange={(event) => updateField('password', event.target.value)}
+          required
+        />
+        {mode === 'register' ? (
+          <select value={form.role} onChange={(event) => updateField('role', event.target.value)}>
+            <option value="user">User</option>
+            <option value="provider">Service Provider</option>
+            <option value="admin">Admin</option>
+          </select>
+        ) : null}
+        {status.message ? <p className={`form-message ${status.type}`}>{status.message}</p> : null}
+        <button type="submit" disabled={isSubmitting}>
+          {isSubmitting ? 'Please wait...' : mode === 'login' ? 'Login' : 'Create Account'}
+        </button>
       </form>
     </section>
   );
 }
 
-function Panel({ title, icon: Icon, children }) {
+function Panel({ title, icon: Icon, children, className = '' }) {
   return (
-    <article className="panel">
+    <article className={`panel ${className}`.trim()}>
       <h2><Icon size={20} />{title}</h2>
       {children}
     </article>

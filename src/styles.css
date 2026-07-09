@@ -103,6 +103,26 @@ a {
   font-size: 0.94rem;
 }
 
+.nav-user {
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.nav-logout {
+  min-width: 76px;
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: #eef2e9;
+  color: #435046;
+  cursor: pointer;
+  font-size: 0.94rem;
+  font-weight: 800;
+}
+
 .nav-links a.active {
   color: white;
   background: var(--ink);
@@ -183,6 +203,7 @@ a {
 .search-panel select,
 .auth-card input,
 .auth-card select,
+.booking-box input,
 .panel input,
 .panel select {
   width: 100%;
@@ -293,6 +314,7 @@ a {
 .booking-box button,
 .dashboard button,
 .auth-card button,
+.mode-tabs button,
 .text-action {
   cursor: pointer;
   border: 1px solid var(--line);
@@ -400,6 +422,10 @@ a {
 
 .empty-state p {
   margin: 0;
+}
+
+.empty-state.compact {
+  min-height: 180px;
 }
 
 .service-card,
@@ -520,7 +546,7 @@ a {
 .card-actions a,
 .booking-box button,
 .dashboard button,
-.auth-card button {
+.auth-card > button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -532,6 +558,11 @@ a {
   background: var(--accent);
   color: white;
   font-weight: 800;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .details-layout,
@@ -559,12 +590,22 @@ a {
 
 .booking-box {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  align-items: center;
+  align-items: end;
   padding: 16px;
   border-radius: 8px;
   background: #f0f5ee;
+}
+
+.booking-box > div,
+.booking-box .form-message {
+  grid-column: 1 / -1;
+}
+
+.booking-box label {
+  display: grid;
+  gap: 6px;
 }
 
 .provider-box {
@@ -605,6 +646,23 @@ a {
   display: block;
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.form-message {
+  margin: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-weight: 700;
+}
+
+.form-message.success {
+  background: #ddf3eb;
+  color: var(--accent-dark);
+}
+
+.form-message.error {
+  background: #fff1eb;
+  color: var(--warn);
 }
 
 .booking-box strong {
@@ -648,6 +706,16 @@ a {
   gap: 18px;
 }
 
+.admin-workspace {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.admin-monitor {
+  grid-column: 1 / -1;
+}
+
 .panel {
   display: grid;
   gap: 12px;
@@ -671,6 +739,78 @@ a {
 .booking-row strong {
   color: var(--warn);
   font-size: 0.86rem;
+}
+
+.booking-list {
+  display: grid;
+  gap: 12px;
+}
+
+.provider-booking {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcf8;
+}
+
+.provider-booking h3 {
+  margin: 4px 0;
+  font-size: 1rem;
+}
+
+.provider-booking p {
+  margin: 3px 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.provider-booking span {
+  color: var(--accent-dark);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.status-pill {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #edf7f3;
+  color: var(--accent-dark);
+  font-size: 0.78rem;
+  text-transform: capitalize;
+}
+
+.status-pill.cancelled {
+  background: #fff1eb;
+  color: var(--warn);
+}
+
+.status-pill.pending,
+.status-pill.requested {
+  background: #fff8df;
+  color: #8a6500;
+}
+
+.status-pill.completed {
+  background: #eef2e9;
+  color: #435046;
+}
+
+.booking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.booking-actions button {
+  min-height: 38px;
+}
+
+.booking-actions .danger {
+  background: var(--warn);
 }
 
 .stat-grid {
@@ -718,10 +858,34 @@ a {
   padding: 22px;
 }
 
+.mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 8px;
+  background: #eef2e9;
+}
+
+.mode-tabs button {
+  min-height: 40px;
+  font-weight: 800;
+}
+
+.mode-tabs button.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
 @media (max-width: 1120px) {
   .card-grid,
   .dashboard-grid {
     grid-template-columns: repeat(2, minmax(230px, 1fr));
+  }
+
+  .admin-workspace {
+    grid-template-columns: 1fr;
   }
 
   .search-panel {
@@ -778,6 +942,7 @@ a {
   .search-panel,
   .card-grid,
   .dashboard-grid,
+  .admin-workspace,
   .stat-grid {
     grid-template-columns: 1fr;
   }
